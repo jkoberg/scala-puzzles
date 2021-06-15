@@ -1,5 +1,4 @@
-package dev.cognosos.puzzle
-
+package us.jkk.examples.parser
 
 /**
  * Coding Exercise - Scala
@@ -10,7 +9,9 @@ package dev.cognosos.puzzle
  * This language will allow blocks and control structures of the following form:
  *
  * begin ... end
+ * 
  * if ..... endif
+ * 
  * for .... loop
  *
  * A valid program consists of zero or more commands or blocks.  A block may contain another
@@ -43,13 +44,15 @@ object TestSuite extends App {
     "end begin" -> false
   )
 
-  for
+  for {
     (program, expectation) <- testPrograms
-  yield
-    validate(program) match
+  } yield {
+    validate(program) match {
       case result if result == expectation =>
         println("Test passed.")
       case _ =>
         sys.error("Test failed.")
+    }
+  }
 
 }

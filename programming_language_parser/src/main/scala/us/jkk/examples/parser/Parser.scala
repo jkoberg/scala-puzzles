@@ -1,14 +1,13 @@
-package dev.cognosos.puzzle
+package us.jkk.examples.parser
 
 import scala.annotation.tailrec
 
-object Parser:
-
+object Parser {
   val beginToks = List("begin", "for", "if")
   val endToks = List("end", "loop", "endif")
   val blockMap = beginToks.zip(endToks).toMap
 
-  def tokenize(s:String): List[String] =
+  def tokenize(s: String): List[String] =
     s.split(raw"\s+")
       .filter(_.nonEmpty)
       .map(_.toLowerCase)
@@ -16,7 +15,7 @@ object Parser:
 
   @tailrec
   def parse(tokens: List[String], stack: List[String] = List.empty): Either[String, String] =
-    (tokens, stack) match
+    (tokens, stack) match {
       case (Nil, Nil) =>
         // End of program
         Right("Finished")
@@ -42,16 +41,17 @@ object Parser:
       case (tok :: rest, stk) =>
         // Consume non-keyword token
         parse(rest, stk)
-
+    }
 
   def validate(text: String): Boolean = {
-    parse(tokenize(text)) match
+    parse(tokenize(text)) match {
       case Right(msg) =>
         println(msg)
         true
       case Left(reason) =>
         println(reason)
         false
+    }
   }
-
+}
 
