@@ -1,4 +1,3 @@
-import scala.collection._
 
 object DiGraph extends App {
 
@@ -12,7 +11,7 @@ object DiGraph extends App {
    */
   case class Node[A](
     a: A,
-    edges: Seq[Node[A]] = Seq.empty
+    edges: Seq[Node[A]] = Seq.empty[Node[A]]
   )
 
   /**
@@ -23,16 +22,16 @@ object DiGraph extends App {
    */
   case class WillVisit[A](
     node: Node[A],
-    via: Seq[Node[A]] = Seq.empty
+    via: Seq[Node[A]]
   )
 
 
   def doesPathExist[A](
-                        current: Node[A],
-                        destination: Node[A],
-                        pathFromOrigin: Seq[Node[A]] = Seq.empty,
-                        alreadyVisited: mutable.Set[Node[A]] = mutable.Set.empty[Node[A]]
-                      ): Boolean = {
+    current: Node[A],
+    destination: Node[A],
+    pathFromOrigin: Seq[Node[A]] = Seq.empty[Node[A]],
+    alreadyVisited: collection.mutable.Set[Node[A]] = collection.mutable.Set.empty[Node[A]]
+  ): Boolean = {
     val pathSoFar = pathFromOrigin :+ current
     if (current.edges.contains(destination)) {
       println(s"Path found: ${(pathSoFar :+ destination).map(_.a.toString).mkString(" -> ")}")
@@ -44,8 +43,8 @@ object DiGraph extends App {
     }
   }
 
-  def shortestPath[A](toVisit: mutable.Queue[WillVisit[A]], destination: Node[A]): Option[Seq[Node[A]]] = {
-    val visited: mutable.Set[Node[A]] = mutable.Set.empty
+  def shortestPath[A](toVisit: collection.mutable.Queue[WillVisit[A]], destination: Node[A]): Option[Seq[Node[A]]] = {
+    val visited: collection.mutable.Set[Node[A]] = collection.mutable.Set.empty
 
     while (toVisit.nonEmpty) {
       val current = toVisit.dequeue()
@@ -66,7 +65,7 @@ object DiGraph extends App {
   }
 
   def shortestPath[A](origin: Node[A], destination: Node[A]): Option[Seq[Node[A]]] = {
-    shortestPath(mutable.Queue(WillVisit(origin)), destination)
+    shortestPath(collection.mutable.Queue(WillVisit(origin, Seq.empty)), destination)
   }
 
 
