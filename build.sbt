@@ -1,11 +1,11 @@
 
 name := "scala-example"
 
-val scala3Version = "3.0.0"
-val scala2Version = "2.13.6"
-val akkaVersion = "2.6.14"
-val akkaHttpVersion = "10.2.4"
-val playJsonVersion = "2.9.2"
+val scala3Version = "3.3.3"
+val scala2Version = "2.13.13"
+val akkaVersion = "2.7.0"
+val akkaHttpVersion = "10.4.0"
+val playJsonVersion = "2.9.3"
 
 ThisBuild / scalacOptions ++= Seq("-deprecation")
 ThisBuild / version := "0.1.0"
@@ -60,3 +60,17 @@ lazy val parser_example = project
 
 lazy val file_search_api = project
   .in(file("file_search_api"))
+
+
+lazy val k_nearest_points = project
+  .in(file("k_nearest_points"))
+
+
+lazy val multivalue_dictionary = project
+  .in(file("multivalue_dictionary"))
+
+lazy val leetcode = project
+  .in(file("leetcode"))
+
+lazy val in_memory_database = project
+  .in(file("in_memory_database"))
