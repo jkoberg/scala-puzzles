@@ -6,12 +6,11 @@ class InMemoryDatabase(initialEpoch: Instant) {
   private type EpochDelta = Duration
   private type RecordKey = String
   private type FieldKey = String
-  private type FieldAddress = (RecordKey, FieldKey)
+  private type CompositeKey = (RecordKey, FieldKey)
   private type FieldValue = String
-  private case class Field(value: String, expires: Option[EpochDelta])
-  private type Record = Map[FieldKey, Field]
-  private type Records = Map[RecordKey, Record]
-  private type TTLQueue = immutable.TreeMap[EpochDelta, Vector[FieldAddress]]
+  private case class Field(value: FieldValue, expires: Option[EpochDelta])
+  private type KVStore = immutable.TreeMap[CompositeKey, Field]
+  private type TTLQueue = immutable.TreeSet[(EpochDelta, CompositeKey)]
   private type TTLSpec = (Instant, Duration)
 
   /**
@@ -28,8 +27,8 @@ class InMemoryDatabase(initialEpoch: Instant) {
    */
   private case class Storage(
     epoch: Instant,
-    records: Records = Map.empty,
-    ttlQueue: TTLQueue = immutable.TreeMap.empty
+    records: KVStore = immutable.TreeMap.empty,
+    ttlQueue: TTLQueue = immutable.TreeSet.empty
   )
 
   private var database: Storage = Storage(epoch = initialEpoch)
@@ -56,12 +55,12 @@ class InMemoryDatabase(initialEpoch: Instant) {
    * @param value The field value to set
    * @param ttl If None, sets a non-expiring value.  If given, sets the TTL based on the given current time and TTL duration.
    */
-  def set(key: RecordKey, field: FieldKey, value: FieldValue, ttl: Option[TTLSpec]): Unit = {
+  def set(cKey: CompositeKey, value: FieldValue, ttl: Option[TTLSpec]): Unit = {
     // Ex: Database epoch is 1000, now is 2000, lifetime is 100 => epochDelta should be 1100
     val expiryDelta: Option[EpochDelta] = ttl.map((now, lifetime) => Duration.between(database.epoch, now).plus(lifetime))
     // We must get the previous record to see if the old TTL is longer than the current one.
     val newValue =
-      (database.records.get(key), expiryDelta) match {
+      (database.records.get(cKey), expiryDelta) match {
         case (Some(Field(value, Some(previousEx))), Some(newEx)) if previousEx.compareTo(newEx) > 0 => Field(value, Some(previousEx))
         case _ => Field(value, expiryDelta)
       }
@@ -69,13 +68,10 @@ class InMemoryDatabase(initialEpoch: Instant) {
     val newTTLqueue =
       expiryDelta match
         case Some(delta) =>
-          val addressesAtDelta = database.ttlQueue.getOrElse(delta, Vector.empty)
-          val newAddressesAtDelta = addressesAtDelta :+ (key, field)
-          database.ttlQueue + (delta -> newAddressesAtDelta)
+          database.ttlQueue.incl((delta, cKey))
         case _ =>
           database.ttlQueue
-    val newRecord = database.records.getOrElse(key, Map.empty) + (field -> newValue)
-    val newRecords = database.records + (key -> newRecord)
+    val newRecords = database.records + (cKey -> newValue)
     database = database.copy(records = newRecords, ttlQueue = newTTLqueue)
   }
 
@@ -85,35 +81,12 @@ class InMemoryDatabase(initialEpoch: Instant) {
    * @param field The field key to retrieve
    * @return None if the value doesn't exist, otherwise the value.
    */
-  def get(key: RecordKey, field: FieldKey): Option[FieldValue] =
+  def get(cKey: CompositeKey): Option[FieldValue] =
     database.records
-      .getOrElse(key, Map.empty)
-      .get(field)
+      .get(cKey)
       .map(_.value)
 
-  /**
-   * Purge field if TTL has expired. Only purge if field has TTL set. The queuedDelta should already be in the epoch reference frame.
-   * @param key The record key to purge
-   * @param field The field name to purge.
-   * @param queuedDelta The expected TTL delta. The field is only purged if its current delta is less than this delta.
-   *                    (If it's not, it means the TTL queue record has be superseded by a subsequent `set`)
-   */
-  private def purge(key: RecordKey, field: FieldKey, queuedDelta: EpochDelta): Boolean = {
-    database.records.get(key) match {
-      case None => false
-      case Some(record) =>
-        record.get(field) match {
-          case Some(Field(_, Some(expiryDelta))) if expiryDelta.compareTo(queuedDelta) <= 0 =>
-            val newRecords = (record - field) match {
-              case newRecord if newRecord.isEmpty => database.records - key
-              case newRecord => database.records + (key -> newRecord)
-            }
-            database = database.copy(records = newRecords)
-            true
-          case _ => false
-        }
-    }
-  }
+
 
   /**
    * Delete key unconditionally. If the resulting record is empty, remove the record.
@@ -121,34 +94,27 @@ class InMemoryDatabase(initialEpoch: Instant) {
    * @param field The field name
    * @return `true` if the key existed and was deleted, else `false`
    */
-  def delete(key: RecordKey, field: FieldKey): Boolean =
-    database.records.get(key) match {
-      case None => false
-      case Some(record) =>
-        record.get(field) match {
-          case None => false
-          case Some(Field(_, _)) =>
-            val newRecords = (record - field) match {
-              case newRecord if newRecord.isEmpty => database.records - key
-              case newRecord => database.records + (key -> newRecord)
-            }
-            database = database.copy(records = newRecords)
-            true
-        }
+  def delete(cKey: CompositeKey): Boolean =
+    database.records.get(cKey) match {
+      case None =>
+        false
+      case Some(Field(_, _)) =>
+        database = database.copy(records = database.records - cKey)
+        true
     }
+
 
   /**
    * Return the fields and values for a requested record.
    * @param key the record key to retrieve
    * @return A sequence of the field names and values, sorted by field name. An empty list if the record doesn't exist.
    */
-  def scan(key:RecordKey): Seq[(FieldKey, FieldValue)] =
+  def scan(key:RecordKey): Iterable[(FieldKey, FieldValue)] =
     database.records
-      .getOrElse(key, Map.empty)
-      .toSeq
-      .sortBy(_._1)
-      .map((k, v) => k -> v.value)
-  
+      .rangeFrom((key, ""))
+      .takeWhile { case ((rk, fk), value) => rk == key }
+      .map { case ((rk, fk), v)  => fk -> v.value }
+
   /**
    * Return fields and values for a requested record, where the field names have a given prefix
    * @param key The record key to retrieve
@@ -156,13 +122,11 @@ class InMemoryDatabase(initialEpoch: Instant) {
    * @return A sequence of field names and values, sorted by field name. An empty list if the record doesn't exist
    *         or no fields match the prefix.
    */
-  def scanPrefixed(key: RecordKey, prefix: FieldKey): Seq[(FieldKey, FieldValue)] =
+  def scanPrefixed(key: RecordKey, prefix: FieldKey): Iterable[(FieldKey, FieldValue)] =
     database.records
-      .getOrElse(key, Map.empty)
-      .filter((k, v) => k.startsWith(prefix))
-      .toSeq
-      .sortBy(_._1)
-      .map((k, v) => k -> v.value)
+      .rangeFrom((key, prefix))
+      .takeWhile { case ((rk, fk), v) => fk.startsWith(prefix) }
+      .map { case ((rk, fk), v) => fk -> v.value }
 
   /**
    * Captures a copy of the database as of the current time.
@@ -171,7 +135,7 @@ class InMemoryDatabase(initialEpoch: Instant) {
    */
   def backup(now: Instant): Int =
     backups = backups + (now -> database)
-    database.records.map((key, fields) => fields.size).sum
+    database.records.size
 
   /**
    * Restores the latest point-in-time backup of the database that occurred before the requested restore point.
@@ -202,19 +166,22 @@ class InMemoryDatabase(initialEpoch: Instant) {
     //     => currentDelta is duration between 1000 and 2500 => 1500
     //     => queued delta is less than current delta => it's expired
     val currentDelta = Duration.between(database.epoch, now)
-    // because the ttlQueue is a TreeMap, we can efficiently partition it at a given point
-    val (fieldsExpired, fieldsUnexpired) = database.ttlQueue.partition { (queuedDelta, _) => queuedDelta.compareTo(currentDelta) < 0 }
-    var count: Int = 0
-    for {
-      (queuedDelta, addresses) <- fieldsExpired
-      (key, field) <- addresses
-    } {
-      if(purge(key, field, queuedDelta)) {
-        count = count + 1
-      }
+    val matchingTtlEntries = database.ttlQueue.takeWhile {
+      case (queuedDelta, _) => queuedDelta.compareTo(currentDelta) <= 0
     }
-    database = database.copy(ttlQueue = fieldsUnexpired)
-    count
+    val matchingRecords = 
+      for {
+        (queuedDelta, cKey) <- matchingTtlEntries
+        case Field(_, Some(expiryDelta)) <- database.records.get(cKey)
+        if expiryDelta.compareTo(queuedDelta) <= 0
+      } yield {
+        cKey
+      }
+    database = database.copy(
+      records = database.records.removedAll(matchingRecords), 
+      ttlQueue = database.ttlQueue.removedAll(matchingTtlEntries)
+    )
+    matchingRecords.size
   }
 }
 

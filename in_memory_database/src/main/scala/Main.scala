@@ -10,7 +10,12 @@ object Main {
     Array("GET_AT", "customers/1", "name", "2000-01-01T00:00:10Z"),
     Array("GET_AT", "blah", "name", "2000-01-01T00:00:25Z"),
     Array("RESTORE_AT", "2000-01-01T00:00:02Z", "2020-01-01T00:00:00Z"),
-    Array("GET_AT", "customers/1", "name", "2020-01-01T00:00:03Z")
+    Array("GET_AT", "customers/1", "name", "2020-01-01T00:00:03Z"),
+    Array("SET", "customers/3", "address/street", "123 Main St"),
+    Array("SET", "customers/3", "address/city", "Townville"),
+    Array("SET", "customers/3", "address/state", "KN"),
+    Array("SET", "customers/3", "address/zip", "93939"),
+    Array("SCAN_PREFIX", "customers/3", "address"),
   )
   
   def main(args: Array[String]): Unit = {

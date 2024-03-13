@@ -12,34 +12,34 @@ class DatabaseAPI(db: InMemoryDatabase) {
     } yield {
       query match {
         case Array("SET", key, field, value) =>
-          db.set(key, field, value, None)
+          db.set((key, field), value, None)
           ""
 
         case Array("SET_AT", key, field, value, ts) =>
           val now = ts.toInstant
           db.advanceTimestamp(now)
-          db.set(key, field, value, None)
+          db.set((key, field), value, None)
           ""
 
         case Array("SET_AT_TTL", key, field, value, ttl, ts) =>
           val now = ts.toInstant
           db.advanceTimestamp(now)
-          db.set(key, field, value, Some(now, ttl.toDuration))
+          db.set((key, field), value, Some(now, ttl.toDuration))
           ""
 
         case Array("GET", key, field) =>
-          db.get(key, field).getOrElse("")
+          db.get((key, field)).getOrElse("")
 
         case Array("GET_AT", key, field, ts) =>
           db.advanceTimestamp(ts.toInstant)
-          db.get(key, field).getOrElse("")
+          db.get((key, field)).getOrElse("")
 
         case Array("DELETE", key, field) =>
-          db.delete(key, field).toString.toUpperCase
+          db.delete((key, field)).toString.toUpperCase
 
         case Array("DELETE_AT", key, field, ts) =>
           db.advanceTimestamp(ts.toInstant)
-          db.delete(key, field).toString.toUpperCase
+          db.delete((key, field)).toString.toUpperCase
 
         case Array("SCAN", key) =>
           db.scan(key)
