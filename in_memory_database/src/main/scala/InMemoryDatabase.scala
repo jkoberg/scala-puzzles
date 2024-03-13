@@ -46,8 +46,6 @@ class InMemoryDatabase(initialEpoch: Instant) {
   }
 
   /**
-   * Set a field value.  If the record doesn't exist, create it.  If a TTL is specified, the record will remain
-   * valid until the later of the given ttl and any previously set ttl.
    * If a previous TTL has been set, and a new set call for the same field doesn't specify a TTL, the record becomes permanent.
    * If a previous TTL has not been set, and a new call sets one, the record will expire at the new TTL
    * @param key The record key to create or update
@@ -56,23 +54,26 @@ class InMemoryDatabase(initialEpoch: Instant) {
    * @param ttl If None, sets a non-expiring value.  If given, sets the TTL based on the given current time and TTL duration.
    */
   def set(cKey: CompositeKey, value: FieldValue, ttl: Option[TTLSpec]): Unit = {
-    // Ex: Database epoch is 1000, now is 2000, lifetime is 100 => epochDelta should be 1100
-    val expiryDelta: Option[EpochDelta] = ttl.map((now, lifetime) => Duration.between(database.epoch, now).plus(lifetime))
-    // We must get the previous record to see if the old TTL is longer than the current one.
-    val newValue =
-      (database.records.get(cKey), expiryDelta) match {
-        case (Some(Field(value, Some(previousEx))), Some(newEx)) if previousEx.compareTo(newEx) > 0 => Field(value, Some(previousEx))
-        case _ => Field(value, expiryDelta)
-      }
-    // If a TTL is called for, insert the expiry record into the TTL queue.
-    val newTTLqueue =
-      expiryDelta match
-        case Some(delta) =>
-          database.ttlQueue.incl((delta, cKey))
-        case _ =>
-          database.ttlQueue
-    val newRecords = database.records + (cKey -> newValue)
-    database = database.copy(records = newRecords, ttlQueue = newTTLqueue)
+    synchronized {
+      // Ex: Database epoch is 1000, now is 2000, lifetime is 100 => epochDelta should be 1100
+      val expiryDelta: Option[EpochDelta] = ttl.map((now, lifetime) => Duration.between(database.epoch, now).plus(lifetime))
+      val existingRecord = database.records.get(cKey)
+      val newValue = Field(value, expiryDelta)
+      val newRecords = database.records.updated(cKey, newValue)
+      // If a TTL is called for, and it differs from the previous one, remove the old TTL record.
+      val newTTLqueue =
+        (expiryDelta, existingRecord) match {
+          case (Some(newTTL), Some(Field(_, Some(oldTTL)))) if newTTL != oldTTL =>
+            database.ttlQueue.excl((oldTTL, cKey)).incl((newTTL, cKey))
+          case (Some(newTTL), _) =>
+            database.ttlQueue.incl((newTTL, cKey))
+          case (None, Some(Field(_, Some(oldTTL)))) =>
+            database.ttlQueue.excl((oldTTL, cKey))
+          case _ =>
+            database.ttlQueue
+        }
+      database = database.copy(records = newRecords, ttlQueue = newTTLqueue)
+    }
   }
 
   /**
@@ -86,8 +87,6 @@ class InMemoryDatabase(initialEpoch: Instant) {
       .get(cKey)
       .map(_.value)
 
-
-
   /**
    * Delete key unconditionally. If the resulting record is empty, remove the record.
    * @param key The record key
@@ -99,10 +98,9 @@ class InMemoryDatabase(initialEpoch: Instant) {
       case None =>
         false
       case Some(Field(_, _)) =>
-        database = database.copy(records = database.records - cKey)
+        database = database.copy(records = database.records.removed(cKey))
         true
     }
-
 
   /**
    * Return the fields and values for a requested record.
@@ -134,8 +132,10 @@ class InMemoryDatabase(initialEpoch: Instant) {
    * @return A count of the number of fields backed up.
    */
   def backup(now: Instant): Int =
-    backups = backups + (now -> database)
-    database.records.size
+    synchronized {
+      backups = backups.updated(now, database)
+      database.records.size
+    }
 
   /**
    * Restores the latest point-in-time backup of the database that occurred before the requested restore point.
@@ -149,12 +149,20 @@ class InMemoryDatabase(initialEpoch: Instant) {
    *         timestamp will be before, or equal to, the requested restorePoint.
    */
   def restore(now: Instant, restorePoint: Instant): Option[Instant] =
-    backups.rangeTo(restorePoint).lastOption match
-      case Some((when, snapshot)) =>
-        database = snapshot.copy(epoch = now)
-        Some(when)
-      case None =>
-        None
+    synchronized {
+      for {
+        // TreeMap doesn't have method to get the element at or immediately preceding a key.
+        // So we need first test the exact restore point, and if not found, get the preceding item.
+        (backupTime, snapshot) <- backups.get(restorePoint).map((restorePoint, _)).orElse(backups.maxBefore(restorePoint))
+      } yield {
+        // Since the database epoch may have been less than the backup time,
+        // we need to subtract the same offset from the current time
+        // so TTLs have the same relationship to the current time as they did to the backup time.
+        val backupDelta = Duration.between(snapshot.epoch, backupTime)
+        database = snapshot.copy(epoch = now.minus(backupDelta))
+        backupTime
+      }
+    }
 
   /**
    * Perform deletion of expired keys.
@@ -162,26 +170,21 @@ class InMemoryDatabase(initialEpoch: Instant) {
    * @return The number of fields expired.
    */
   def advanceTimestamp(now: Instant): Int = {
-    // ex: DB Epoch is 1000. Queued delta is 1100. Now is 2500.
-    //     => currentDelta is duration between 1000 and 2500 => 1500
-    //     => queued delta is less than current delta => it's expired
-    val currentDelta = Duration.between(database.epoch, now)
-    val matchingTtlEntries = database.ttlQueue.takeWhile {
-      case (queuedDelta, _) => queuedDelta.compareTo(currentDelta) <= 0
+    synchronized {
+      // ex: DB Epoch is 1000. Queued delta is 1100. Now is 2500.
+      //     => currentDelta is duration between 1000 and 2500 => 1500
+      //     => queued delta is less than current delta => it's expired
+      val currentDelta = Duration.between(database.epoch, now)
+      // We can't construct a string that will compare "greater than" all other strings, which we would need
+      // to formulate a .rangeTo() that extends to the last composite key. So we use .takeWhile instead.
+      val matchingTtlEntries = database.ttlQueue.takeWhile(_._1.compareTo(currentDelta) <= 0)
+      val matchingRecords = matchingTtlEntries.map(_._2)
+      database = database.copy(
+        records = database.records.removedAll(matchingRecords),
+        ttlQueue = database.ttlQueue.removedAll(matchingTtlEntries)
+      )
+      matchingRecords.size
     }
-    val matchingRecords = 
-      for {
-        (queuedDelta, cKey) <- matchingTtlEntries
-        case Field(_, Some(expiryDelta)) <- database.records.get(cKey)
-        if expiryDelta.compareTo(queuedDelta) <= 0
-      } yield {
-        cKey
-      }
-    database = database.copy(
-      records = database.records.removedAll(matchingRecords), 
-      ttlQueue = database.ttlQueue.removedAll(matchingTtlEntries)
-    )
-    matchingRecords.size
   }
 }
 
