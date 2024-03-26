@@ -94,12 +94,14 @@ class InMemoryDatabase(initialEpoch: Instant) {
    * @return `true` if the key existed and was deleted, else `false`
    */
   def delete(cKey: CompositeKey): Boolean =
-    database.records.get(cKey) match {
-      case None =>
-        false
-      case Some(Field(_, _)) =>
-        database = database.copy(records = database.records.removed(cKey))
-        true
+    synchronized {
+      database.records.get(cKey) match {
+        case None =>
+          false
+        case Some(Field(_, _)) =>
+          database = database.copy(records = database.records.removed(cKey))
+          true
+      }
     }
 
   /**
