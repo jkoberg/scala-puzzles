@@ -74,3 +74,6 @@ lazy val leetcode = project
 
 lazy val in_memory_database = project
   .in(file("in_memory_database"))
+
+lazy val trees = project
+  .in(file("trees"))
