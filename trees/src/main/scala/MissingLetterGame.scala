@@ -17,16 +17,17 @@ object MissingLetterGame {
 
   val BLANK = '_'
 
-  case class BoardState(partialWord: String, misses: Set[Char] = Set.empty) {
-    def guesses: Set[Char] = misses ++ partialWord.filter(_ != BLANK)
-  }
+  case class BoardState(partialWord: String, misses: Set[Char] = Set.empty)
 
 
   /**
    * Given a board state and lexicon, return words that could be playable.
    */
-  def filterWordsByBoardState(boardState: BoardState, words: Seq[String]): Seq[String] = {
+  def filterWordsByBoardState(boardState: BoardState, words: Seq[String]): (mutable.Set[String], mutable.Set[Char]) = {
     val (filledPositions, blankPositions) = boardState.partialWord.zipWithIndex.partition((c, i) => c != BLANK)
+    val guesses = boardState.misses ++ filledPositions.map((c, i) => boardState.partialWord.charAt(i))
+    val possibleWords = mutable.Set.empty[String]
+    val possibleGuesses = mutable.Set.empty[Char]
     for {
       word <- words
       // Word must be the same length as the target
@@ -35,27 +36,13 @@ object MissingLetterGame {
       if filledPositions.forall((c, i) => word.charAt(i) == c)
       // Word must not contain missed guesses
       if !boardState.misses.exists(c => word.contains(c))
-      // Word must not have an already-guessed charater in a different position
-      if blankPositions.forall((c, i) => !boardState.guesses.contains(word.charAt(i)))
-    } yield {
-      word
-    }
-  }
-
-  /** Given a set of words, return all the potential letters that could be guessed.
-   * These will be the set of letters that could appear in blank spaces in the board's partial word.
-   * */
-  def possibleGuesses(partialWord: String, words: Seq[String]): mutable.Set[Char] = {
-    // the possible guesses are letters of possible words that are blank in the partial word
-    val blankIndices = partialWord.indices.filter(i => partialWord.charAt(i) == BLANK)
-    val possibleGuesses = mutable.HashSet.empty[Char]
-    for {
-      word <- words
-      i <- blankIndices
+      // Word must not have an already-guessed character in a different position
+      if blankPositions.forall((c, i) => !guesses.contains(word.charAt(i)))
     } {
-      possibleGuesses.add(word.charAt(i))
+      possibleWords.add(word)
+      possibleGuesses.addAll(blankPositions.map((c, i) => word.charAt(i)))
     }
-    possibleGuesses
+    (possibleWords, possibleGuesses)
   }
 
 
@@ -71,6 +58,7 @@ object MissingLetterGame {
     }
     String(partialChars)
   }
+  
 
 
   /** Given a board state and set of words, return the guess that minimizes the number of misses
@@ -86,9 +74,8 @@ object MissingLetterGame {
   ): (Int, Option[Char]) = {
     memo.getOrElseUpdate(state, {
       // Player's turn - find a guess that leads to minimum misses
-      val possibleWords = filterWordsByBoardState(state, words)
-      possibleGuesses(state.partialWord, possibleWords) match {
-
+      val (possibleWords, possibleGuesses) = filterWordsByBoardState(state, words)
+      possibleGuesses match {
         // If no guess is possible (no words must have been possible), the game is over - return the count of misses.
         case guesses if guesses.isEmpty =>
           (state.misses.size, lastGuess)
@@ -101,7 +88,7 @@ object MissingLetterGame {
               // If this guess can yield a miss, produce the miss.
               case (_, missWords) if missWords.nonEmpty =>
                 val newState = state.copy(misses = state.misses + guess)
-                traverse(newState, missWords, Some(guess), memo)
+                traverse(newState, missWords.toSeq, Some(guess), memo)
 
               // If there is only one word left, there will be no more misses, terminate by returning the current count.
               case (Seq(hit), _) =>
@@ -112,7 +99,7 @@ object MissingLetterGame {
               case (hitWords, _) =>
                 hitWords.map { hit =>
                   val newState = state.copy(partialWord = replaceBlanks(state.partialWord, hit, guess))
-                  traverse(newState, hitWords, Some(guess), memo)
+                  traverse(newState, hitWords.toSeq, Some(guess), memo)
                 }.max
             }
           }.min
