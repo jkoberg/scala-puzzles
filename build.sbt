@@ -1,8 +1,8 @@
 
 name := "scala-example"
 
-val scala3Version = "3.3.3"
-val scala2Version = "2.13.13"
+val scala3Version = "3.5.1"
+val scala2Version = "2.13.15"
 val akkaVersion = "2.7.0"
 val akkaHttpVersion = "10.4.0"
 val playJsonVersion = "2.9.3"
